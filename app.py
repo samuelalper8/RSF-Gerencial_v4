@@ -188,7 +188,7 @@ st.markdown(_CSS, unsafe_allow_html=True)
 _PWD_HASH      = "d8def52178c00ca7dd0e4a0a144cdc84d3e0c1ce48a61aacafa0ae0eccc3cb8b"
 # sha256("socios2026")  ← senha padrão para sócios
 # Para alterar: python3 -c "import hashlib; print(hashlib.sha256(b'nova_senha').hexdigest())"
-_SOCIO_PWD_HASH = "4e6bfb93b97d2c6a5f6ef3e204a9fa6a35e87e2c9a5b0a1c7d8e3f2b4c6d9e1"
+_SOCIO_PWD_HASH = "9c0158938d89c4ab482641dfe793f02ad9618af1d631e134e6e053316a42e7aa"
 _REF_DATE   = "12/03/2026"
 _UFS        = ("GO", "TO", "MS")
 _DECL_OPTIONS = ["DCTF","DCTFWEB","SISOBRA","GFIP","ECF","EFD","DEFIS",
