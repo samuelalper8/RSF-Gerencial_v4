@@ -31,6 +31,21 @@ except Exception as _import_err:
 else:
     _IMPORT_ERROR = None
 
+# ── Módulos do dashboard de sócios (opcionais — não quebram o app se ausentes) ─
+try:
+    from supabase_client import publicar_analise, supabase_disponivel
+    from dashboard_socios import render_dashboard_socios
+    _DASHBOARD_OK = True
+except Exception as _dash_err:
+    _DASHBOARD_OK     = False
+    _DASHBOARD_ERR: str = str(_dash_err)
+    def render_dashboard_socios() -> None:   # type: ignore[misc]
+        st.error(f"❌ Dashboard de sócios indisponível: {_DASHBOARD_ERR}")
+    def publicar_analise(*a, **kw):          # type: ignore[misc]
+        raise RuntimeError("supabase_client não disponível")
+    def supabase_disponivel() -> bool:       # type: ignore[misc]
+        return False
+
 st.set_page_config(
     page_title="ConPrev — Análise de Restrições",
     page_icon="🛡️", layout="wide",
@@ -169,7 +184,11 @@ hr{border:none!important;border-top:1px solid var(--border)!important;margin:18p
 st.markdown(_CSS, unsafe_allow_html=True)
 
 # ── Constantes ────────────────────────────────────────────────────────────────
-_PWD_HASH   = "d8def52178c00ca7dd0e4a0a144cdc84d3e0c1ce48a61aacafa0ae0eccc3cb8b"
+# sha256("conprev2026")  ← senha admin (mude conforme README)
+_PWD_HASH      = "d8def52178c00ca7dd0e4a0a144cdc84d3e0c1ce48a61aacafa0ae0eccc3cb8b"
+# sha256("socios2026")  ← senha padrão para sócios
+# Para alterar: python3 -c "import hashlib; print(hashlib.sha256(b'nova_senha').hexdigest())"
+_SOCIO_PWD_HASH = "4e6bfb93b97d2c6a5f6ef3e204a9fa6a35e87e2c9a5b0a1c7d8e3f2b4c6d9e1"
 _REF_DATE   = "12/03/2026"
 _UFS        = ("GO", "TO", "MS")
 _DECL_OPTIONS = ["DCTF","DCTFWEB","SISOBRA","GFIP","ECF","EFD","DEFIS",
@@ -180,10 +199,12 @@ def _brl_fmt(v): return f"R$ {v:,.2f}".replace(",","X").replace(".",",").replace
 
 ss = st.session_state
 ss.setdefault("authenticated",    False)
+ss.setdefault("role",             None)   # "admin" | "socio"
 ss.setdefault("result_zip_bytes", None)
 ss.setdefault("result_file_count",0)
 ss.setdefault("analysis_done",    False)
 ss.setdefault("last_stats",       None)
+ss.setdefault("last_ts",          None)   # timestamp do último ZIP gerado
 
 # ── Helpers UI ────────────────────────────────────────────────────────────────
 def _section(title, icon="", accent="#F29F05"):
@@ -248,8 +269,11 @@ def render_login():
         </div>""", unsafe_allow_html=True)
         pwd = st.text_input("Senha de acesso", type="password", placeholder="••••••••")
         if st.button("Entrar", type="primary", use_container_width=True):
-            if _sha256(pwd) == _PWD_HASH:
-                ss.authenticated = True; st.rerun()
+            h = _sha256(pwd)
+            if h == _PWD_HASH:
+                ss.authenticated = True; ss.role = "admin"; st.rerun()
+            elif h == _SOCIO_PWD_HASH:
+                ss.authenticated = True; ss.role = "socio"; st.rerun()
             else:
                 st.error("⚠️ Senha incorreta. Tente novamente.")
         st.markdown('<p style="text-align:center;font-size:11px;color:#7a95ad;margin-top:22px">'
@@ -285,8 +309,9 @@ def render_header():
             f'border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:4px 10px">'
             f'Ref.&nbsp;{_REF_DATE}</span></div>', unsafe_allow_html=True)
         if st.button("↩ Sair", key="logout_btn"):
-            ss.authenticated = False; ss.result_zip_bytes = None
-            ss.analysis_done = False; ss.last_stats = None; st.rerun()
+            ss.authenticated = False; ss.role = None; ss.result_zip_bytes = None
+            ss.analysis_done = False; ss.last_stats = None; ss.last_ts = None
+            ss.pop("ultima_publicacao_id", None); st.rerun()
 
 # ── Análise ───────────────────────────────────────────────────────────────────
 def _save_uploads(files):
@@ -332,8 +357,9 @@ def run_analysis(uploaded, municipios, log_ph, logo_bytes=None, filtro_decl=None
         fc  = sum(1 for p in out_dir.rglob("*") if p.is_file())
         zb  = _zip_dir(out_dir)
         stats = get_last_stats() if get_last_stats else None
+        ts_now = time.strftime("%Y-%m-%d_%Hh%M")
         log_cb(f"\n✅ Concluído — {fc} arquivo(s) gerado(s).")
-        return zb, fc, stats
+        return zb, fc, stats, ts_now
     except RuntimeError as e:
         st.error(f"❌ {e}"); log_cb(f"\n❌ Erro: {e}"); return None
     except Exception as e:
@@ -677,7 +703,7 @@ def render_app():
             result = run_analysis(uploaded, selected_muns, log_ph,
                                   logo_bytes=logo_bytes, filtro_decl=filtro_decl or None)
         if result:
-            ss.result_zip_bytes, ss.result_file_count, ss.last_stats = result
+            ss.result_zip_bytes, ss.result_file_count, ss.last_stats, ss.last_ts = result
             ss.analysis_done = True; st.rerun()
 
     # Dicas
@@ -724,6 +750,47 @@ def render_app():
             data=ss.result_zip_bytes,
             file_name=f"ConPrev_Restricoes_{ts}.zip",
             mime="application/zip", use_container_width=True)
+
+        # ── Publicar para sócios (somente admin + Supabase configurado) ──────
+        if ss.role == "admin" and _DASHBOARD_OK:
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+            pub_col, status_col = st.columns([1, 2])
+            with pub_col:
+                if st.button("📤 Publicar para Sócios", key="btn_publicar",
+                             use_container_width=True,
+                             help="Envia os dados desta análise ao Supabase para que os sócios visualizem no dashboard."):
+                    if not supabase_disponivel():
+                        st.error("⚠️ Supabase não configurado. Verifique secrets.toml.")
+                    elif not ss.last_stats:
+                        st.error("⚠️ Estatísticas não disponíveis. Rode a análise novamente.")
+                    else:
+                        with st.spinner("Publicando no Supabase…"):
+                            try:
+                                analise_id = publicar_analise(
+                                    stats=ss.last_stats,
+                                    zip_bytes=ss.result_zip_bytes,
+                                    ref_date=_REF_DATE,
+                                    ts=ss.last_ts or ts,
+                                )
+                                ss["ultima_publicacao_id"] = analise_id
+                            except Exception as pub_err:
+                                st.error(f"❌ Falha na publicação: {pub_err}")
+                                analise_id = None
+                        if analise_id:
+                            st.rerun()
+            with status_col:
+                if ss.get("ultima_publicacao_id"):
+                    st.markdown(
+                        f'<div style="padding:10px 16px;background:rgba(42,156,107,.08);'
+                        f'border:1px solid rgba(42,156,107,.25);border-radius:8px;margin-top:2px">'
+                        f'<p style="color:#4dd8a0;font-weight:700;font-size:12px;margin:0 0 2px">'
+                        f'✅ Publicado com sucesso</p>'
+                        f'<p style="color:#7a95ad;font-size:11px;margin:0">'
+                        f'ID: <code style="color:#2d8fd4">{ss["ultima_publicacao_id"][:8]}…</code>'
+                        f' — Sócios já podem visualizar no dashboard.</p>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
         if st.button("🔄 Nova análise", key="reset_btn"):
             ss.result_zip_bytes = None; ss.result_file_count = 0
             ss.analysis_done = False; ss.last_stats = None; st.rerun()
@@ -735,5 +802,7 @@ def render_app():
 # ── Entry point ───────────────────────────────────────────────────────────────
 if not ss.authenticated:
     render_login()
+elif ss.role == "socio":
+    render_dashboard_socios()
 else:
     render_app()
