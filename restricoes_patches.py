@@ -16,6 +16,7 @@ _DECL_TYPES = ["EFD-REINF","REINF","DCTFWEB","DCTF","SISOBRA","DESTDA","DeSTDA",
                "DEFIS","DIRPF","PGDAS","GIA-ST","GFIP","PGFN","SPED","ECF","EFD"]
 _DECL_FILTER: set[str] | None = None
 _last_stats: dict | None = None   # resultado da última análise
+_last_ocorrencias: dict | None = None  # ocorrencias_por_mun da última análise
 
 
 # ── API pública de filtro ───────────────────────────────────────────────────
@@ -287,6 +288,7 @@ def patch_analisar_restricoes() -> None:
 
             # Estatísticas
             _last_stats = compute_stats(ocorrencias, selecionados)
+            _last_ocorrencias = {m: list(v) for m, v in ocorrencias.items()}
 
             # ── Gera relatórios gerenciais visuais ──────────────────────────
             # FIX 1: garante que ger_dir exista mesmo que _orig tenha falhado
