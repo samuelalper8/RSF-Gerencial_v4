@@ -263,7 +263,7 @@ def patch_analisar_restricoes() -> None:
 
     _orig = _mod.analisar_restricoes
     def _patched(base_dir, municipios_escolhidos, incluir_subpastas, out_root, log_cb):
-        global _last_stats
+        global _last_stats, _last_ocorrencias
         result = _orig(base_dir, municipios_escolhidos, incluir_subpastas, out_root, log_cb)
         out_dir = result[0]
         log_cb("🎨 Gerando layout visual e estatísticas…")
@@ -295,6 +295,14 @@ def patch_analisar_restricoes() -> None:
             #         antes de criar o diretório (evita FileNotFoundError no glob).
             ger_dir.mkdir(parents=True, exist_ok=True)
 
+            # FIX ts: timestamp único compartilhado por TODOS os renders.
+            # Sem isso, render_all_gerenciais e render_estatisticas_pdf geram
+            # timestamps diferentes → render_consolidado_completo não acha
+            # "ESTATISTICAS_*.pdf" porque o glob busca pelo prefixo mas o
+            # arquivo foi salvo com outro ts.
+            import time as _time
+            ts_unico = _time.strftime("%Y%m%d%H%M")
+
             # FIX 2: padrão swap atômico — gera os novos PDFs em um diretório
             #         temporário e só substitui o ger_dir original após sucesso
             #         total. Dessa forma, se o renderer falhar, os arquivos
@@ -312,6 +320,7 @@ def patch_analisar_restricoes() -> None:
                     selecionados=selecionados,
                     ger_dir=ger_tmp, logo=logo,
                     filtro_decl=_DECL_FILTER,
+                    ts=ts_unico,
                 )
 
                 # Relatório unificado (todos municípios num só PDF)
@@ -319,6 +328,7 @@ def patch_analisar_restricoes() -> None:
                     ocorrencias_por_mun=ocorrencias,
                     municipios=municipios_escolhidos,
                     ger_dir=ger_tmp, logo=logo,
+                    ts=ts_unico,
                 )
 
                 # Painel executivo de estatísticas em PDF
@@ -327,12 +337,15 @@ def patch_analisar_restricoes() -> None:
                     render_estatisticas_pdf(
                         stats=_last_stats,
                         ger_dir=ger_tmp, logo=logo,
+                        ts=ts_unico,
                     )
 
-                # Consolidado completo (todos gerenciais num só PDF com capas)
+                # Consolidado completo — deve rodar APÓS todos os outros
+                # e receber o mesmo ts_unico para achar os arquivos pelo glob
                 log_cb("📚 Gerando relatório consolidado completo…")
                 render_consolidado_completo(
                     ger_dir=ger_tmp, logo=logo,
+                    ts=ts_unico,
                 )
 
                 # Swap atômico: substitui ger_dir pelos novos PDFs visuais
