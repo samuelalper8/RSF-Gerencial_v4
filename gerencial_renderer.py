@@ -679,11 +679,15 @@ def render_validade_cnd(selecionados, ger_dir, logo=None, ts="") -> Path:
 
 # ── API pública ────────────────────────────────────────────────────────────
 def render_all_gerenciais(ocorrencias_por_mun, municipios, selecionados,
-                          ger_dir, logo=None, filtro_decl=None):
+                          ger_dir, logo=None, filtro_decl=None, ts: str = ""):
     if fitz is None:
         raise RuntimeError("PyMuPDF não instalado.")
     ger_dir.mkdir(parents=True, exist_ok=True)
-    ts = time.strftime("%Y%m%d%H%M")
+    # Usa ts externo se fornecido — garante que todos os arquivos gerados
+    # (incluindo render_estatisticas_pdf e render_consolidado_completo)
+    # compartilhem o mesmo timestamp para o glob do consolidado funcionar.
+    if not ts:
+        ts = time.strftime("%Y%m%d%H%M")
     return [
         render_devedores(ocorrencias_por_mun, municipios, ger_dir, logo, ts),
         render_maeds(ocorrencias_por_mun, municipios, ger_dir, logo, ts),
