@@ -1,7 +1,7 @@
 """
 ConPrev — Análise de Restrições  ·  Interface Web (Streamlit)
 =============================================================
-v6: Seleção multi-UF, CSS Custom, Gestão Local (JSON) e HTML Executivo.
+v7: UX Polished. Sincronização Dinâmica JSON. Prevenção de "Atropelamento" UI.
 """
 from __future__ import annotations
 import hashlib, io, os, shutil, sys, tempfile, time, zipfile
@@ -14,7 +14,7 @@ for _stub in ("tkinter","tkinter.filedialog","tkinter.messagebox"):
 
 # ── Importação do motor de análise e patches ──
 try:
-    from relatorio_restricoes_module import MUNICIPIOS_POR_UF, analisar_restricoes
+    from relatorio_restricoes_module import analisar_restricoes
     try:
         from restricoes_patches import (
             patch_analisar_restricoes, set_decl_filter, get_last_stats,
@@ -25,14 +25,13 @@ try:
         get_last_stats  = None   # type: ignore[assignment]
 except Exception as _import_err:
     _IMPORT_ERROR: str | None = str(_import_err)
-    MUNICIPIOS_POR_UF = {}
     analisar_restricoes = None
     set_decl_filter = None
     get_last_stats  = None
 else:
     _IMPORT_ERROR = None
 
-# ── Módulos Locais (Substituindo Supabase por JSON Local e inserindo HTML) ──
+# ── Módulos Locais ──
 try:
     from clientes_local import listar_clientes, cadastrar_cliente, remover_cliente
 except ImportError:
@@ -49,14 +48,33 @@ try:
     from dashboard_socios import render_dashboard_socios
     _DASHBOARD_OK = True
 except Exception as _dash_err:
-    _DASHBOARD_OK     = False
+    _DASHBOARD_OK = False
     def render_dashboard_socios() -> None:   # type: ignore[misc]
         st.error("❌ Dashboard de sócios indisponível.")
+
+# 🚀 MÁGICA DE SINCRONIZAÇÃO: Puxando do JSON Local dinamicamente
+clientes_json = listar_clientes()
+MUNICIPIOS_POR_UF = {"GO": [], "TO": [], "MS": []}
+
+for cli in clientes_json:
+    nome_completo = cli["nome"]
+    # Identifica a UF baseada na tag inserida no import
+    uf_detectada = "GO"
+    if "(TO)" in nome_completo: uf_detectada = "TO"
+    elif "(MS)" in nome_completo: uf_detectada = "MS"
+    
+    # Limpa a visualização para o Motor de PDF reconhecer corretamente
+    nome_limpo = nome_completo.replace(" (GO)", "").replace(" (TO)", "").replace(" (MS)", "").strip()
+    MUNICIPIOS_POR_UF[uf_detectada].append(nome_limpo)
+
+# Ordena alfabeticamente para facilitar a localização no painel central
+for uf in MUNICIPIOS_POR_UF:
+    MUNICIPIOS_POR_UF[uf].sort()
 
 st.set_page_config(
     page_title="ConPrev — Análise de Restrições",
     page_icon="🛡️", layout="wide",
-    initial_sidebar_state="expanded", # Alterado para manter a sidebar visível
+    initial_sidebar_state="expanded",
 )
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
@@ -168,12 +186,12 @@ def _brl_fmt(v): return f"R$ {v:,.2f}".replace(",","X").replace(".",",").replace
 
 ss = st.session_state
 ss.setdefault("authenticated",    False)
-ss.setdefault("role",             None)   # "admin" | "socio"
+ss.setdefault("role",             None)
 ss.setdefault("result_zip_bytes", None)
 ss.setdefault("result_file_count",0)
 ss.setdefault("analysis_done",    False)
 ss.setdefault("last_stats",       None)
-ss.setdefault("last_ts",          None)   # timestamp do último ZIP gerado
+ss.setdefault("last_ts",          None)
 
 # ── Helpers UI ────────────────────────────────────────────────────────────────
 def _section(title, icon="", accent="#F29F05"):
@@ -335,7 +353,6 @@ def render_stats(stats: dict) -> None:
     cnd    = stats.get("cnd_status", {})
     top    = stats.get("top_devedores", [])
     bd     = stats.get("decl_breakdown", {})
-    por_m  = stats.get("por_municipio", [])
 
     st.markdown(
         '<div style="height:1px;background:linear-gradient(90deg,'
@@ -424,33 +441,34 @@ def render_app():
         st.error(f"❌ `relatorio_restricoes_module.py` não encontrado:\n\n`{_IMPORT_ERROR}`")
         return
 
-    # Injeção da Gestão Local de Carteira na Sidebar
+    # === BARRA LATERAL ANTI-ATROPELAMENTO ===
     st.sidebar.markdown("---")
     st.sidebar.subheader("⚙️ Gestão de Carteira")
-    with st.sidebar.expander("Cadastrar / Remover Clientes"):
-        with st.form("form_novo_cliente", clear_on_submit=True):
-            st.markdown("**Novo Cliente (Município/Entidade)**")
-            novo_cnpj = st.text_input("CNPJ (Apenas números ou com máscara)")
-            novo_nome = st.text_input("Nome do Ente Público")
-            btn_salvar = st.form_submit_button("➕ Cadastrar")
-            if btn_salvar and novo_cnpj and novo_nome:
-                if cadastrar_cliente(novo_cnpj, novo_nome):
-                    st.success(f"✅ {novo_nome} cadastrado!")
-                    st.rerun()
+    st.sidebar.info(f"📊 **{len(clientes_json)} entidades** ativas na base.")
 
-        st.markdown("---")
-        st.markdown("**Carteira Ativa**")
-        clientes_base = listar_clientes()
-        if not clientes_base:
-            st.info("Nenhum cliente cadastrado.")
-        else:
-            for cli in clientes_base:
-                col1, col2 = st.columns([4, 1])
-                col1.markdown(f"**{cli['nome']}**<br><small style='color:#2d8fd4'>{cli['cnpj']}</small>", unsafe_allow_html=True)
-                if col2.button("🗑️", key=f"del_{cli['cnpj']}", help="Remover da base"):
-                    if remover_cliente(cli['cnpj']):
+    with st.sidebar.expander("➕ Cadastrar Cliente"):
+        with st.form("form_novo", clear_on_submit=True):
+            novo_cnpj = st.text_input("CNPJ (Apenas números ou formatado)")
+            novo_nome = st.text_input("Nome da Entidade")
+            novo_uf = st.selectbox("Estado", ["GO", "TO", "MS"])
+            if st.form_submit_button("Salvar na Base"):
+                if novo_cnpj and novo_nome:
+                    nome_final = f"{novo_nome} ({novo_uf})"
+                    if cadastrar_cliente(novo_cnpj, nome_final):
+                        st.success(f"Adicionado: {novo_nome}")
                         st.rerun()
 
+    with st.sidebar.expander("🗑️ Remover Cliente"):
+        if not clientes_json:
+            st.warning("Base vazia.")
+        else:
+            # Cria um dicionário seguro para o selectbox
+            lista_remocao = {f"{c['nome']} - {c['cnpj']}": c['cnpj'] for c in sorted(clientes_json, key=lambda x: x['nome'])}
+            selecionado = st.selectbox("Localize a entidade:", [""] + list(lista_remocao.keys()))
+            if selecionado and st.button("Remover Definitivamente"):
+                remover_cliente(lista_remocao[selecionado])
+                st.success("Removido.")
+                st.rerun()
 
     render_header()
     st.markdown(
@@ -497,7 +515,7 @@ def render_app():
             with tab_map[uf]:
                 muns = MUNICIPIOS_POR_UF.get(uf, [])
                 sel_key = f"mun_sel_{uf}"
-                n_uf_sel = sum(ss[sel_key].values())
+                n_uf_sel = sum(ss[sel_key].get(m, False) for m in muns)
 
                 b1, b2, _ = st.columns([1,1,2])
                 with b1:
@@ -507,9 +525,10 @@ def render_app():
                     if st.button(f"✗ Limpar", key=f"clr_{uf}", use_container_width=True):
                         _sync_checkboxes(uf, False); st.rerun()
 
-                grid = st.columns(3)
+                # === AJUSTE DE LAYOUT: Reduzido para 2 colunas para evitar atropelamento de nomes grandes ===
+                grid = st.columns(2)
                 for i, m in enumerate(muns):
-                    with grid[i % 3]:
+                    with grid[i % 2]:
                         ss[sel_key][m] = st.checkbox(
                             m, value=ss[sel_key].get(m,False),
                             key=f"cb_{uf}_{m}")
@@ -545,7 +564,7 @@ def render_app():
     n_upl = len(uploaded) if uploaded else 0
     can_run = bool(selected_muns and n_upl)
 
-    btn_label = "🔍 Analisar Restrições" if not can_run else f"🔍 Analisar — {len(selected_muns)} municípios"
+    btn_label = "🔍 Analisar Restrições" if not can_run else f"🔍 Analisar — {len(selected_muns)} entidades"
 
     if st.button(btn_label, type="primary", use_container_width=True, disabled=not can_run):
         ss.result_zip_bytes = None; ss.analysis_done = False; ss.last_stats = None
@@ -574,7 +593,6 @@ def render_app():
         
         ts = time.strftime("%Y-%m-%d_%Hh%M")
         
-        # Botões de Download lado a lado (ZIP original e Novo HTML Executivo)
         col_down1, col_down2 = st.columns(2)
         with col_down1:
             st.download_button(
