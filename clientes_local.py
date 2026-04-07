@@ -28,7 +28,6 @@ def cadastrar_cliente(cnpj: str, nome: str) -> bool:
     """Cadastra um novo município/entidade verificando duplicidade."""
     clientes = carregar_clientes()
     
-    # Validação de materialidade: evita duplicidade de CNPJ
     if any(c["cnpj"] == cnpj for c in clientes):
         st.warning(f"CNPJ {cnpj} já está cadastrado na base.")
         return False
